@@ -4,6 +4,7 @@ const FamilyDetails = require('../models/familyDetailsModel');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
+const { sequelize } = require('../db');
 
 exports.register = async (req, res) => {
   const { username, password } = req.body;
@@ -122,9 +123,9 @@ exports.getDashboardStats = async (req, res) => {
     const total_family_members = await FamilyDetails.count();
 
     const currentDate = new Date();
-    const adultAge = new Date(currentDate.setFullYear(currentDate.getFullYear() - 12));
-    const kidsAge = new Date(currentDate.setFullYear(currentDate.getFullYear() - 10));
-    const infantsAge = new Date(currentDate.setFullYear(currentDate.getFullYear() - 2));
+    const adultAge = new Date(currentDate.setFullYear(new Date().getFullYear() - 12));
+    const kidsAge = new Date(currentDate.setFullYear(new Date().getFullYear() - 2));
+    const infantsAge = new Date(currentDate.setFullYear(new Date().getFullYear() - 2));
 
     const adult_count = await User.count({
       where: {
@@ -143,7 +144,7 @@ exports.getDashboardStats = async (req, res) => {
     const kids_count = await FamilyDetails.count({
       where: {
         dob: {
-          [Op.between]: [kidsAge, adultAge]
+          [Op.between]: [adultAge, kidsAge]
         }
       }
     });
@@ -197,6 +198,50 @@ exports.getDashboardStats = async (req, res) => {
       not_paid_count
     });
   } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server error');
+  }
+};
+
+exports.createUsers = async (req, res) => {
+  const users = req.body;
+  const transaction = await sequelize.transaction();
+
+  try {
+    const createdUsers = await Promise.all(users.map(async user => {
+      const hashedPassword = await bcrypt.hash(user.password, 10);
+      const createdUser = await User.create({
+        name: user.name,
+        email: user.email,
+        password: hashedPassword,
+        dob: user.dob,
+        office_amount: user.office_amount,
+        additional_amount: user.additional_amount,
+        amount_payable: user.amount_payable,
+        payment_status: user.payment_status,
+        is_family_included: user.is_family_included,
+        adults_count: user.adults_count,
+        kids_count: user.kids_count,
+        infants_count: user.infants_count
+      }, { transaction });
+
+      if (user.family_details && user.family_details.length > 0) {
+        await FamilyDetails.bulkCreate(user.family_details.map(family => ({
+          user_id: createdUser.id,
+          first_name: family.first_name,
+          middle_name: family.middle_name,
+          last_name: family.last_name,
+          dob: family.dob
+        })), { transaction });
+      }
+
+      return createdUser;
+    }));
+
+    await transaction.commit();
+    res.status(201).json(createdUsers);
+  } catch (err) {
+    await transaction.rollback();
     console.error(err.message);
     res.status(500).send('Server error');
   }
